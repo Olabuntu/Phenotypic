@@ -1,0 +1,293 @@
+```{r}
+library(vegan)
+
+#importing and calculating crop diversity
+df_culture <- read.csv("cultures.csv")
+
+
+df_culture <- aggregate(Abondance ~ Parcelle + Especes.presentes, data = df_culture, FUN = sum)
+
+crop_matrix <- reshape(df_culture, 
+                        idvar = "Parcelle", 
+                        timevar = "Especes.presentes", 
+                        v.names = "Abondance",
+                        direction = "wide")
+
+crop_matrix[is.na(crop_matrix)] <- 0
+
+crop_diversity  <- data.frame(Parcelle = crop_matrix$Parcelle,
+                            Shannon_index_crop = diversity(crop_matrix[, -1], index = "shannon"))
+
+write.csv(crop_diversity, "crop_diversity.csv", row.names = FALSE)
+```
+
+
+
+
+```{r}
+# calculating nematode diversity
+df_nematodes <- read.csv("nematodes_cleaned.csv")
+
+
+nematode_matrix <- reshape(df_nematodes[, c("Parcelle", "species", "Proportion" )], 
+                        idvar = "Parcelle",
+                        timevar = "species", 
+                        v.names = "Proportion",
+                        direction = "wide")
+nematode_matrix[is.na(nematode_matrix)] <- 0
+nematode_diversity <- data.frame(Parcelle = nematode_matrix$Parcelle,
+                                  Shannon_index_nematodes = diversity(nematode_matrix[, -1], index = "shannon"))
+write.csv(nematode_diversity, "nematode_diversity.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+print('---------------------------------------------')
+# calculating trophic diversity
+df_trophic <- read.csv("nematodes_cleaned.csv")
+
+df_trophic <- aggregate(Proportion ~ Parcelle + trophic.group, data = df_trophic, FUN = sum)
+
+trophic_matrix <- reshape(df_trophic[, c("Parcelle", "trophic.group", "Proportion")], 
+                        idvar = "Parcelle",
+                        timevar = "trophic.group", 
+                        v.names = "Proportion",
+                        direction = "wide")
+trophic_matrix[is.na(trophic_matrix)] <- 0
+
+colnames(trophic_matrix) <- c("Parcelle", 
+                                "Phytoparasite", 
+                                "Predator", 
+                                "Unknown")
+
+write.csv(trophic_matrix, "trophic_diversity.csv", row.names = FALSE)
+
+```
+
+```{r}
+df_egg <- read.csv("oeufs_nematodes.csv")
+
+
+# combining all diversity indices
+df_combined <- merge(crop_diversity, nematode_diversity, by = "Parcelle", all = TRUE)
+df_combined <- merge(df_combined, trophic_matrix, by = "Parcelle", all = TRUE)
+df_combined <- merge(df_combined, df_egg, by = "Parcelle", all = TRUE)
+df_combined <- df_combined[order(df_combined$Parcelle), ]
+
+write.csv(df_combined, "combined_diversity.csv", row.names = FALSE)
+
+```
+
+```{r}
+
+library(betareg)
+df_combined_beta <- df_combined
+
+df_combined_beta$Phytoparasite  <- ((df_combined_beta$Phytoparasite/100) * (nrow(df_combined_beta) - 1) + 0.5) / nrow(df_combined_beta)
+
+df_combined_beta$Predator <- ((df_combined_beta$Predator/100) * (nrow(df_combined_beta) - 1) + 0.5) / nrow(df_combined_beta)
+df_combined_beta$Unknown <- ((df_combined_beta$Unknown/100) * (nrow(df_combined_beta) - 1) + 0.5) / nrow(df_combined_beta)
+
+model_phyto <- betareg(Phytoparasite ~ Shannon_index_crop  + Œufs, data = df_combined_beta)
+model_pred <- betareg(Predator ~ Shannon_index_crop  + Œufs, data = df_combined_beta)
+model_unknown <- betareg(Unknown ~ Shannon_index_crop  + Œufs, data = df_combined_beta)
+summary(model_phyto)
+summary(model_pred)
+summary(model_unknown)
+
+
+
+
+
+
+```
+
+```{r}
+#check the rows droppped by the model
+
+nrow(model_phyto$model) 
+summary(df_combined$Phytoparasite)
+
+nrow(model_pred$model)
+summary(df_combined$Predator)
+
+nrow(model_unknown$model)
+summary(df_combined$Unknown)
+
+```
+
+```{r}
+# save summary results in rsds
+write.csv(summary(model_phyto)$coefficients, "model_phyto_summary_beta.csv")
+write.csv(summary(model_pred)$coefficients, "model_pred_summary_beta.csv")
+write.csv(summary(model_unknown)$coefficients, "model_unknown_summary_beta.csv")
+
+
+
+```
+
+
+```{r}
+# binomial glm for trophic diversity
+df_combined_glm <- df_combined
+df_combined_glm$Phytoparasite <- round(df_combined_glm$Phytoparasite)
+df_combined_glm$Predator <- round(df_combined_glm$Predator)
+df_combined_glm$Unknown <- round(df_combined_glm$Unknown)
+
+
+#binomial glm
+
+model_phyto_glm <- glm(cbind(Phytoparasite, 100 - Phytoparasite) ~ Shannon_index_crop  + Œufs, family = "binomial", data = df_combined_glm)
+model_pred_glm <- glm(cbind(Predator, 100 - Predator) ~ Shannon_index_crop  + Œufs, family = "binomial", data = df_combined_glm)
+model_unknown_glm <- glm(cbind(Unknown, 100 - Unknown) ~ Shannon_index_crop  + Œufs, family = "binomial", data = df_combined_glm)
+#summary of the models
+summary(model_phyto_glm)
+print("-------------------")
+summary(model_pred_glm)
+print("-------------------")
+summary(model_unknown_glm)
+
+
+```
+
+```{r}
+# save summary results in csv
+write.csv(summary(model_phyto_glm)$coefficients, "model_phyto_summary_glm.csv")
+write.csv(summary(model_pred_glm)$coefficients, "model_pred_summary_glm.csv")
+write.csv(summary(model_unknown_glm)$coefficients, "model_unknown_summary_glm.csv")
+
+
+```
+
+```{r}
+# linear model for nematode diversity
+model_nematode <- lm(Shannon_index_nematodes ~ Shannon_index_crop + Œufs, data = df_combined)
+summary(model_nematode)
+
+
+```
+
+```{r}
+# save summary results in csv
+write.csv(summary(model_nematode)$coefficients, "model_nematode_lm.csv")
+```
+
+
+
+```{r}
+# Load required packages
+library(ggplot2)
+library(dplyr)
+library(factoextra)
+library(phangorn)
+library(ggtree)
+library(phangorn)
+
+
+
+# PCA for the data
+
+# read the combined data
+
+df_combined_pca <- read.csv("combined_diversity.csv")
+
+# convert all col to numeric
+df_combined_pca[, -1] <- lapply(df_combined_pca[, -1], as.numeric)
+
+#remove NA rows
+df_combined_pca <- na.omit(df_combined_pca)
+
+
+df_combined_pca$trophic_factor <- apply(df_combined_pca[, c("Phytoparasite", "Predator", "Unknown")], 1, function(x) {
+  c("Phytoparasite", "Predator", "Unknown")[which.max(x)]
+})
+
+```
+
+
+```{r}
+
+# Perform PCA removing 1st and last column (Parcelle and trophic_factor)
+pca_result <- prcomp(df_combined_pca[, -c(1, ncol(df_combined_pca))], 
+                    center = TRUE, 
+                    scale. = TRUE)
+
+
+
+png("pca_plot.png", width = 3000, height = 4000, res = 300)                   
+# Visualize PCA results
+fviz_pca_ind(pca_result, 
+             geom.ind = "point", 
+             col.ind = df_combined_pca$trophic_factor, 
+             palette = c("red", "blue", "green"), 
+             addEllipses = TRUE, 
+             legend.title = "Trophic Factor") +
+  labs(title = "PCA of Nematode Diversity Data") +
+  theme_minimal()
+dev.off()
+
+
+
+
+pca_scores <- as.data.frame(pca_result$x)
+# Add Parcelle and trophic_factor to PCA scores
+pca_scores$Parcelle <- df_combined_pca$Parcelle
+pca_scores$trophic_factor <- df_combined_pca$trophic_factor
+write.csv(pca_scores, "pca_scores.csv", row.names = FALSE)
+
+```
+
+```{r}
+
+
+
+# Scale the numeric data
+matTrans <- scale(df_combined_pca[, -c(1, ncol(df_combined_pca))])
+
+# Compute Euclidean distance matrix
+d <- dist(matTrans, method = "euclidean")
+
+# Perform hierarchical clustering using UPGMA method
+tupgma <- upgma(d)
+
+# Prepare class data (must be a data.frame with 'label' column matching tree tip labels)
+class_data <- data.frame(
+  label = df_combined_pca[, 1],
+  class = df_combined_pca$trophic_factor
+)
+
+class_data$class <- factor(class_data$class, levels = c("Phytoparasite", "Predator"))
+
+png("dendrogram_plot.png", width = 4000, height = 3000, res = 300)
+
+# Create circular dendrogram with class-based tip coloring and legend
+t4 <- ggtree(tupgma, layout = "circular", size = 1) %<+% class_data +
+  geom_text(aes(color = class, label = label, angle = angle,
+                hjust = -0.2), 
+            size = 5,  # Increase size for larger text
+            fontface = "bold",  # Ensure bold font
+            show.legend = FALSE) +
+  geom_tippoint(aes(color = class), alpha = 0.7, size = 2) +
+  labs(title = "Circular Dendrogram",
+       color = "Trophic Factor") + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        legend.position = "right")
+
+# Show the plot
+print(t4)
+
+dev.off()
+
+
+
+
+
+
+# Save the clustering result
+# hc_clusters <- cutree(hc_result, k = 3)  # Cut the dendrogram into 3 clusters
+# df_combined_pca$hc_cluster <- hc_clusters
+# write.csv(df_combined_pca, "hc_clusters.csv", row.names = FALSE)
+
+```
+
